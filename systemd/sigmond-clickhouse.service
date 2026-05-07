@@ -1,0 +1,18 @@
+[Unit]
+Description=sigmond ClickHouse staging tier (wraps clickhouse-server)
+Documentation=file:///opt/git/sigmond/clickhouse/README.md
+Wants=clickhouse-server.service
+After=clickhouse-server.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=-/etc/sigmond/coordination.env
+# This unit is a coordination shim: it ensures clickhouse-server is
+# active and applies sigmond's drop-ins.  The actual daemon is
+# clickhouse-server.service; the systemd Wants/After pulls it in.
+ExecStart=/bin/systemctl is-active --quiet clickhouse-server.service
+ExecStop=/bin/true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sigmond-clickhouse"
+version = "0.1.0"
+description = "Local ClickHouse staging tier for the HamSCI sigmond suite"
+readme = "README.md"
+license = "MIT"
+authors = [
+  { name = "Michael Hauan AC0G", email = "ac0g@hauan.org" },
+  { name = "Rob Robinett AI6VN" },
+]
+requires-python = ">=3.11"
+dependencies = [
+  "clickhouse-connect>=0.7.0",
+]
+
+[project.scripts]
+sigmond-clickhouse = "sigmond_clickhouse.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["sigmond_clickhouse*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

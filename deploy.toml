@@ -1,0 +1,85 @@
+[package]
+name             = "sigmond-clickhouse"
+version          = "0.1.0"
+contract_version = "0.6"
+license          = "MIT"
+
+# sigmond-clickhouse is a server component (kind="server" in catalog).
+# It does NOT consume from radiod, does NOT produce data sinks itself —
+# it provides the local CH staging tier that other clients write to per
+# CONTRACT §17.  Its lifecycle wraps the Debian clickhouse-server package.
+
+# Configuration interview (§14).  init creates /etc/sigmond/secrets/
+# clickhouse-sigmond.pass and writes the listen-address drop-in based on
+# coordination.toml's [storage.clickhouse].listen value.
+[contract.config]
+init = ["/usr/local/sbin/sigmond-clickhouse", "config", "init"]
+edit = ["/usr/local/sbin/sigmond-clickhouse", "config", "edit"]
+
+[build]
+steps = [
+    "python3 -m venv /opt/sigmond-clickhouse/venv",
+    "/opt/sigmond-clickhouse/venv/bin/pip install --upgrade pip setuptools wheel",
+    "/opt/sigmond-clickhouse/venv/bin/pip install -e /opt/git/sigmond/clickhouse",
+]
+produces = [
+    "/opt/sigmond-clickhouse/venv/bin/sigmond-clickhouse",
+]
+
+[[install.steps]]
+kind = "link"
+src  = "/opt/sigmond-clickhouse/venv/bin/sigmond-clickhouse"
+dst  = "/usr/local/sbin/sigmond-clickhouse"
+
+[[install.steps]]
+kind = "link"
+src  = "systemd/sigmond-clickhouse.service"
+dst  = "/etc/systemd/system/sigmond-clickhouse.service"
+
+[[install.steps]]
+kind = "mkdir"
+dst  = "/etc/clickhouse-server/config.d"
+mode = "0755"
+
+# Listen-address drop-in.  Rendered from etc/10-sigmond-listen.xml.j2
+# using SIGMOND_CLICKHOUSE_LISTEN from coordination.env.  Loopback is
+# the default; "lan" requires explicit operator opt-in.
+[[install.steps]]
+kind     = "render"
+src      = "etc/10-sigmond-listen.xml.j2"
+dst      = "/etc/clickhouse-server/config.d/10-sigmond-listen.xml"
+if_absent = false
+
+[[install.steps]]
+kind = "mkdir"
+dst  = "/etc/sigmond/secrets"
+owner = "sigmond:sigmond"
+mode  = "0750"
+
+[systemd]
+units = ["sigmond-clickhouse.service"]
+
+# Schemas this component owns (vendored from upstream wsprdaemon-server).
+# Other clients ship their own schema/ trees; this block only declares
+# the wire-pinned WSPR DDL.
+[clickhouse]
+database         = "wspr"
+schema_dir       = "schema/wsprdaemon"
+schema_version   = 2
+required_min_ch  = "23.8"
+provenance       = "SCHEMA_PROVENANCE"
+
+[deps]
+[[deps.apt]]
+name = "clickhouse-server"
+note = "the Debian/upstream clickhouse-server package; sigmond does not fork it"
+
+[[deps.apt]]
+name = "clickhouse-client"
+note = "for smd ch verbs and operator queries"
+
+[[deps.pypi]]
+name    = "clickhouse-connect"
+version = ">=0.7.0"
+venv    = "/opt/sigmond-clickhouse/venv"
+note    = "Python driver used by the inventory shim and migration runner"

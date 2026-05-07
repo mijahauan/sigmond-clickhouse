@@ -1,0 +1,38 @@
+# Schema Provenance for sigmond-clickhouse
+
+The WSPR schema files under `schema/wsprdaemon/` are vendored verbatim
+from the upstream `wsprdaemon-server` so that local rows are
+byte-for-byte equivalent to the rows wsprdaemon.org expects.  Keeping
+this DDL in sync with upstream is the wire-compat anchor for the
+future hs-uploader's WSPR shipping path.
+
+## Vendored from
+
+- Repo:    https://github.com/rrobinett/wsprdaemon-server
+- Branch:  main
+- Commit:  374514ee3f6fff4f751a96bfe6559d1d7a58747b
+- Pulled:  2026-05-07
+- Source:  wsprdaemon_server.py:280-362 (create_spots_table_sql,
+           create_noise_table_sql)
+
+## Update procedure
+
+When wsprdaemon-server's spots/noise DDL changes:
+
+1. Diff the upstream `wsprdaemon_server.py` `CREATE TABLE` blocks against
+   `schema/wsprdaemon/{spots,noise}.sql`.
+2. If the change is additive (new column, ALTER TABLE ADD COLUMN), add a
+   numbered migration `schema/wsprdaemon/NNN_<name>.sql` with the ALTER.
+3. If the change is breaking (column removed, type changed), bump the
+   `wsprdaemon` schema version in `deploy.toml`'s `[clickhouse]` block,
+   add the migration, and notify wsprdaemon-client to bump its
+   `schema_ref` accordingly.
+4. Update this file's commit hash and pull date.
+5. Run `smd ch verify-wspr` (when implemented) to confirm.
+
+## Other databases
+
+Schemas for `psk`, `hfdl`, `codar`, and `timestd` databases are owned by
+the producing client (e.g. `psk-recorder/clickhouse/schema/`); they are
+not vendored here and have no upstream sync obligation.  Only the
+`wspr` database is wire-pinned.
