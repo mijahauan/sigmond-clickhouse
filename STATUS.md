@@ -149,20 +149,29 @@ toa_uncertainty_ms, doppler_hz, quality_flag, distance_km,
 delay_plausible.  Wire through `timestd-fusion.service` since L2
 already lives there.
 
-### Phase D — codar-sounder  ⏸ DEFERRED (await v0.2 dechirp engine)
+### Phase D — codar-sounder  ✅ COMPLETE (shipped in codar-sounder v0.4.0)
 
-codar-sounder is at v0.1 scaffold; the FMCW dechirp engine lands in
-v0.2.  CH integration is greenfield then: time, station_id,
-oblique_freq_hz, sweep_rate, group_range_km, virtual_height_km +
-uncertainty, equivalent_vertical_freq_mhz + uncertainty,
-takeoff_zenith_deg.  Order: codar-sounder v0.2 first, then CH wiring.
+The FMCW dechirp engine landed in v0.3, and v0.4.0 wired the full
+CH integration: `clickhouse/schema/codar/{000,001}_*.sql` (greenfield
+`codar.spots` — ReplacingMergeTree, monthly-partitioned, ORDER BY
+`(host_call, station_id, time, peak_index)`); `[clickhouse]` block
+in `deploy.toml` (schema_version 1); `data_sinks` in inventory; per-
+peak insert via `sigmond.hamsci_ch.Writer` from `SounderDaemon`.
+v0.4.0 also added multi-peak detection + layer classifier
+(`E`/`F1`/`F2`/`F2_extreme`) and `tdma-scan --write-config`.
 
-### Schema-migration runner integration  ⏸ DEFERRED
+### Schema-migration runner integration  ✅ COMPLETE
 
-Currently `sigmond-clickhouse migrate` runs only the WSPR migrations
-shipped in its own repo.  A future `smd apply` walks each installed
-client's `[clickhouse].schema_dir` and runs that client's
-migrations too.  This is a small `installer.py` integration in sigmond.
+`sigmond.commands.ch_apply` walks every installed client's
+`deploy.toml` for a `[clickhouse]` block, materialises the per-client
+schema_dir, and runs the `[0-9]*.sql` migrations against the
+configured CH server.  Hooked into `bin/smd cmd_apply` so
+`sudo smd apply` brings every database to the schema version each
+client expects.  Idempotent (uses `CREATE … IF NOT EXISTS`); per-
+client failures don't abort sibling clients.  No-op when
+`[storage.clickhouse]` is absent from coordination.toml (file-only
+default preserved).  14 tests cover discovery, migration ordering,
+dry-run, partial-failure isolation, and summary rendering.
 
 ## Test totals
 
