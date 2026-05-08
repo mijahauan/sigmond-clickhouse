@@ -140,14 +140,21 @@ Both clients land independently, sibling pattern to Phase A.
     0x-prefixed.
   - Wired into `core/daemon.py` `_start_ch_tailers()` per-band.
 
-### Phase C — hf-timestd L2/L3 events  ⏸ DEFERRED (post codar-sounder)
+### Phase C — hf-timestd L2 events  ✅ COMPLETE (shipped in hf-timestd v7.1.0)
 
-L1 stays HDF5 (raw correlator output is wrong shape for CH).  L2
-detection events (per WWV/WWVH/CHU/BPM cycle) become `timestd.events`
-rows: timestamp, station, frequency_khz, snr_db, raw_toa_ms,
-toa_uncertainty_ms, doppler_hz, quality_flag, distance_km,
-delay_plausible.  Wire through `timestd-fusion.service` since L2
-already lives there.
+L1 raw correlator output stays in HDF5 (canonical metrology
+artefact).  L2 fused detections emitted by
+`L2CalibrationService._calibrate_measurement` (~1 row/min/station)
+also land in `timestd.events` via a `sigmond.hamsci_ch.Writer`
+constructed in `L2CalibrationService.__init__`; per-station inserts
+fire right after the HDF5 `write_measurement` call.  CH failures are
+non-fatal — the HDF5 path is unaffected.  Schema in
+`hf-timestd/clickhouse/schema/timestd/`: greenfield `timestd.events`
+combining the plan's L2 fields with hf-timestd's own
+`L2TimingMeasurement` record (clock_offset_ms,
+expanded_uncertainty_ms, propagation_mode, n_hops, quality_grade,
+discrimination_method).  Contract v0.6, `data_sinks` replacing
+`disk_writes` in inventory.
 
 ### Phase D — codar-sounder  ✅ COMPLETE (shipped in codar-sounder v0.4.0)
 
