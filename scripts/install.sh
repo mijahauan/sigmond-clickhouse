@@ -18,20 +18,87 @@ require_root() {
     fi
 }
 
-require_clickhouse_server() {
-    if ! systemctl list-unit-files clickhouse-server.service >/dev/null 2>&1; then
-        cat >&2 <<EOF
-ERROR: clickhouse-server.service not installed.
-
-  sigmond-clickhouse wraps the upstream Debian clickhouse-server package
-  (we do not fork or replace it).  Install it first:
-
-      sudo apt install clickhouse-server clickhouse-client
-
-  Then re-run this script.
-EOF
-        exit 1
+ensure_clickhouse_server() {
+    # ClickHouse isn't in Debian's default repos — we have to add the
+    # upstream APT source first.  Idempotent: every step short-circuits
+    # when its artifact is already present, so re-running is a no-op
+    # once installed.
+    if systemctl list-unit-files clickhouse-server.service >/dev/null 2>&1; then
+        return 0
     fi
+    echo "==> clickhouse-server not installed; adding upstream APT repo"
+    apt-get install -y -qq apt-transport-https ca-certificates curl gnupg \
+        >/dev/null
+    if [[ ! -s /usr/share/keyrings/clickhouse-keyring.gpg ]]; then
+        curl -fsSL https://packages.clickhouse.com/rpm/lts/repodata/repomd.xml.key \
+            | gpg --batch --yes --dearmor \
+              -o /usr/share/keyrings/clickhouse-keyring.gpg
+        chmod 0644 /usr/share/keyrings/clickhouse-keyring.gpg
+    fi
+    if [[ ! -f /etc/apt/sources.list.d/clickhouse.list ]]; then
+        echo "deb [signed-by=/usr/share/keyrings/clickhouse-keyring.gpg] \
+https://packages.clickhouse.com/deb stable main" \
+            > /etc/apt/sources.list.d/clickhouse.list
+    fi
+    apt-get update -qq
+    # DEBIAN_FRONTEND=noninteractive: the clickhouse-server postinst
+    # otherwise prompts for the default-user password through debconf
+    # and hangs forever when stdin is closed (which it is when smd
+    # invokes us under sudo).
+    echo "==> installing clickhouse-server + clickhouse-client"
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+        clickhouse-server clickhouse-client >/dev/null
+}
+
+ensure_clickhouse_user() {
+    # Generate a random password (saved at the path coordination.toml's
+    # [storage.clickhouse].password_file points at) and create a
+    # `sigmond` ClickHouse user with the privileges the schema migrator
+    # needs.  Idempotent: skip everything when the password file is
+    # already present (operator may have rotated it manually).
+    local pw_file="/etc/sigmond/secrets/clickhouse-sigmond.pass"
+    if [[ -s "$pw_file" ]]; then
+        echo "==> $pw_file already populated; not regenerating"
+        return 0
+    fi
+    echo "==> generating clickhouse-sigmond password + bootstrapping user"
+
+    # Make sure clickhouse-server is up so we can talk to it.  systemd
+    # may not have started it on a fresh install.  Brief retry covers
+    # the ~1-2s the daemon needs to start accepting connections.
+    systemctl is-active --quiet clickhouse-server.service \
+        || systemctl start clickhouse-server.service
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        clickhouse-client --query "SELECT 1" >/dev/null 2>&1 && break
+        sleep 1
+    done
+
+    local pw
+    pw="$(openssl rand -hex 24)"
+    umask 077
+    printf '%s\n' "$pw" > "$pw_file"
+    # Owned by sigmond, readable by the clickhouse group so the server
+    # postinst's `clickhouse` user can read it for password-file auth
+    # when we later switch to that mode.  Falls back to sigmond:sigmond
+    # if the clickhouse group isn't present (rare; postinst creates it).
+    if getent group clickhouse >/dev/null 2>&1; then
+        chown sigmond:clickhouse "$pw_file" 2>/dev/null \
+            || chown root:root "$pw_file"
+    else
+        chown sigmond:sigmond "$pw_file" 2>/dev/null \
+            || chown root:root "$pw_file"
+    fi
+    chmod 0640 "$pw_file"
+
+    # `GRANT ALL` requires WITH GRANT OPTION which the default user
+    # lacks for some privileges (notably SHOW NAMED COLLECTIONS
+    # SECRETS); enumerate the privileges schema migrations actually
+    # need instead.
+    clickhouse-client -q "
+        CREATE USER IF NOT EXISTS sigmond IDENTIFIED WITH plaintext_password BY '$pw';
+        GRANT CREATE, ALTER, DROP, SELECT, INSERT, OPTIMIZE ON *.* TO sigmond;
+    " >/dev/null
+    echo "==> sigmond user created in ClickHouse with required grants"
 }
 
 build_venv() {
@@ -76,12 +143,13 @@ ensure_secrets_dir() {
 
 main() {
     require_root
-    require_clickhouse_server
+    ensure_clickhouse_server
     build_venv
     link_binaries
     install_systemd_unit
     install_drop_in
     ensure_secrets_dir
+    ensure_clickhouse_user
     echo "==> sigmond-clickhouse installed."
     echo "    Next: enable [storage.clickhouse] in /etc/sigmond/coordination.toml,"
     echo "    then: sudo smd apply && sudo systemctl start sigmond-clickhouse"
